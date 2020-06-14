@@ -1,13 +1,7 @@
 /**
- * External dependencies
- */
-import { mapKeys } from 'lodash';
-
-/**
  * WordPress dependencies
  */
 import { useSelect, __unstableUseDispatchWithMap } from '@wordpress/data';
-import { useMemo } from '@wordpress/element';
 
 function formatTypesSelector( select ) {
 	return select( 'core/rich-text' ).getFormatTypes();
@@ -23,122 +17,103 @@ function formatTypesSelector( select ) {
  */
 export function useFormatTypes( { clientId, identifier } ) {
 	const formatTypes = useSelect( formatTypesSelector, [] );
-	const selectProps = useSelect(
-		( select ) => {
-			return formatTypes.reduce( ( acc, settings ) => {
-				if (
-					! settings.__experimentalGetPropsForEditableTreePreparation
-				) {
-					return acc;
-				}
+	const {
+		selectProps,
+		dependencies,
+		prepareHandlers,
+		valueHandlers,
+	} = useSelect(
+		( select ) =>
+			formatTypes.reduce(
+				( acc, settings ) => {
+					const args = {
+						richTextIdentifier: identifier,
+						blockClientId: clientId,
+					};
 
-				const selectPrefix = `format_prepare_props_(${ settings.name })_`;
-				return {
-					...acc,
-					...mapKeys(
-						settings.__experimentalGetPropsForEditableTreePreparation(
+					let selected;
+
+					if (
+						settings.__experimentalGetPropsForEditableTreePreparation
+					) {
+						selected = settings.__experimentalGetPropsForEditableTreePreparation(
 							select,
-							{
-								richTextIdentifier: identifier,
-								blockClientId: clientId,
-							}
-						),
-						( value, key ) => selectPrefix + key
-					),
-				};
-			}, {} );
-		},
+							args
+						);
+
+						acc.dependencies.push( ...Object.values( selected ) );
+						acc.selectProps[ settings.name ] = selected;
+					}
+
+					if ( settings.__experimentalCreatePrepareEditableTree ) {
+						const handler = settings.__experimentalCreatePrepareEditableTree(
+							selected,
+							args
+						);
+
+						if (
+							settings.__experimentalCreateOnChangeEditableValue
+						) {
+							acc.valueHandlers.push( handler );
+						} else {
+							acc.prepareHandlers.push( handler );
+						}
+					}
+
+					return acc;
+				},
+				{
+					dependencies: [],
+					selectProps: {},
+					prepareHandlers: [],
+					valueHandlers: [],
+				}
+			),
 		[ formatTypes, clientId, identifier ]
 	);
-	const dispatchProps = __unstableUseDispatchWithMap(
-		( dispatch ) => {
-			return formatTypes.reduce( ( acc, settings ) => {
+	const changeHandlers = __unstableUseDispatchWithMap(
+		( dispatch ) =>
+			formatTypes.reduce( ( acc, settings ) => {
+				let dispatcher;
+
 				if (
-					! settings.__experimentalGetPropsForEditableTreeChangeHandler
+					settings.__experimentalGetPropsForEditableTreeChangeHandler
 				) {
-					return acc;
+					dispatcher = settings.__experimentalGetPropsForEditableTreeChangeHandler(
+						dispatch,
+						{
+							richTextIdentifier: identifier,
+							blockClientId: clientId,
+						}
+					);
+					dispatcher = {
+						...selectProps[ settings.name ],
+						...dispatcher,
+					};
 				}
 
-				const dispatchPrefix = `format_on_change_props_(${ settings.name })_`;
-				return {
-					...acc,
-					...mapKeys(
-						settings.__experimentalGetPropsForEditableTreeChangeHandler(
-							dispatch,
+				if ( settings.__experimentalCreateOnChangeEditableValue ) {
+					acc.push(
+						settings.__experimentalCreateOnChangeEditableValue(
+							dispatcher,
 							{
 								richTextIdentifier: identifier,
 								blockClientId: clientId,
 							}
-						),
-						( value, key ) => dispatchPrefix + key
-					),
-				};
-			}, {} );
-		},
-		[ formatTypes, clientId, identifier ]
-	);
-	const functions = useMemo( () => {
-		return formatTypes.reduce( ( acc, settings ) => {
-			if ( ! settings.__experimentalCreatePrepareEditableTree ) {
+						)
+					);
+				}
+
 				return acc;
-			}
-
-			const args = {
-				richTextIdentifier: identifier,
-				blockClientId: clientId,
-			};
-			const combined = {
-				...selectProps,
-				...dispatchProps,
-			};
-
-			const { name } = settings;
-			const selectPrefix = `format_prepare_props_(${ name })_`;
-			const dispatchPrefix = `format_on_change_props_(${ name })_`;
-			const propsByPrefix = Object.keys( combined ).reduce(
-				( accumulator, key ) => {
-					if ( key.startsWith( selectPrefix ) ) {
-						accumulator[ key.slice( selectPrefix.length ) ] =
-							combined[ key ];
-					}
-
-					if ( key.startsWith( dispatchPrefix ) ) {
-						accumulator[ key.slice( dispatchPrefix.length ) ] =
-							combined[ key ];
-					}
-
-					return accumulator;
-				},
-				{}
-			);
-
-			if ( settings.__experimentalCreateOnChangeEditableValue ) {
-				return {
-					...acc,
-					[ `format_value_functions_(${ name })` ]: settings.__experimentalCreatePrepareEditableTree(
-						propsByPrefix,
-						args
-					),
-					[ `format_on_change_functions_(${ name })` ]: settings.__experimentalCreateOnChangeEditableValue(
-						propsByPrefix,
-						args
-					),
-				};
-			}
-
-			return {
-				...acc,
-				[ `format_prepare_functions_(${ name })` ]: settings.__experimentalCreatePrepareEditableTree(
-					propsByPrefix,
-					args
-				),
-			};
-		}, {} );
-	}, [ formatTypes, clientId, identifier, selectProps, dispatchProps ] );
+			}, [] ),
+		[ formatTypes, clientId, identifier, ...dependencies ]
+	);
 
 	return {
-		dependencies: Object.values( selectProps ),
-		functions,
 		formatTypes,
+		prepareHandlers,
+		valueHandlers,
+		changeHandlers,
+		dependencies,
 	};
 }
